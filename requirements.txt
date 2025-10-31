@@ -3,7 +3,7 @@
 # ================================================================
 # Ce fichier liste tous les outils Python nécessaires
 
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
-python-multipart==0.0.6
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+python-multipart>=0.0.12
