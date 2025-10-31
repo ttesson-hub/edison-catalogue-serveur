@@ -1,9 +1,17 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import sqlite3
 from datetime import datetime
+import os
+import shutil
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 app = FastAPI(title="Edison Catalogue API")
 
@@ -40,6 +48,44 @@ class BatchResult(BaseModel):
     failed: int
     errors: List[dict]
 
+class EmailRequest(BaseModel):
+    to_email: EmailStr
+    subject: str
+    body: str
+    da_number: Optional[str] = None
+    attachment_path: Optional[str] = None
+
+class DAArticle(BaseModel):
+    reference: str
+    designation: str
+    quantity: int
+    unit: str
+    price: float
+
+class DARequest(BaseModel):
+    user_email: str
+    user_name: str
+    site: str
+    articles: List[DAArticle]
+    attachment_filename: Optional[str] = None
+    comments: Optional[str] = None
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Configuration email (à personnaliser)
+EMAIL_CONFIG = {
+    "SMTP_SERVER": "smtp.gmail.com",
+    "SMTP_PORT": 587,
+    "SENDER_EMAIL": "votre-email@gmail.com",  # À configurer
+    "SENDER_PASSWORD": "votre-mot-de-passe-app",  # À configurer
+    "ENABLED": False  # Mettre True quand configuré
+}
+
 # ============================================================
 # DATABASE
 # ============================================================
@@ -51,6 +97,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Table produits
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             reference TEXT PRIMARY KEY,
@@ -61,6 +108,50 @@ def init_db():
             icon TEXT DEFAULT '📦',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Table demandes d'achat
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            da_number TEXT UNIQUE NOT NULL,
+            user_email TEXT NOT NULL,
+            user_name TEXT NOT NULL,
+            site TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            attachment_filename TEXT,
+            comments TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Table articles des DA
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS da_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            da_number TEXT NOT NULL,
+            reference TEXT NOT NULL,
+            designation TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            unit TEXT NOT NULL,
+            price REAL NOT NULL,
+            FOREIGN KEY (da_number) REFERENCES purchase_requests(da_number)
+        )
+    """)
+    
+    # Table fichiers uploadés
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS uploaded_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT UNIQUE NOT NULL,
+            original_filename TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_size INTEGER,
+            mime_type TEXT,
+            uploaded_by TEXT,
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -189,81 +280,4 @@ async def delete_product(reference: str):
         return {"success": True, "message": "Produit supprimé"}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================
-# 🚀 NOUVEL ENDPOINT BATCH - SYNCHRONISATION RAPIDE
-# ============================================================
-
-@app.post("/api/products/batch")
-async def batch_products(products: List[Product]):
-    """
-    Synchronisation en masse de produits
-    Crée les nouveaux produits et met à jour les existants
-    """
-    created = 0
-    updated = 0
-    failed = 0
-    errors = []
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        for product in products:
-            try:
-                # Vérifier si le produit existe
-                cursor.execute("SELECT reference FROM products WHERE reference = ?", (product.reference,))
-                exists = cursor.fetchone()
-                
-                if exists:
-                    # MISE À JOUR
-                    cursor.execute(
-                        """UPDATE products 
-                           SET designation = ?, price = ?, unit = ?, family = ?, icon = ?, updated_at = ?
-                           WHERE reference = ?""",
-                        (product.designation, product.price, product.unit, product.family, 
-                         product.icon, datetime.now().isoformat(), product.reference)
-                    )
-                    updated += 1
-                else:
-                    # CRÉATION
-                    cursor.execute(
-                        """INSERT INTO products (reference, designation, price, unit, family, icon)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (product.reference, product.designation, product.price, 
-                         product.unit, product.family, product.icon)
-                    )
-                    created += 1
-                    
-            except Exception as e:
-                failed += 1
-                errors.append({
-                    "reference": product.reference,
-                    "error": str(e)
-                })
-        
-        # Commit une seule fois à la fin
-        conn.commit()
-        conn.close()
-        
-        return {
-            "success": True,
-            "created": created,
-            "updated": updated,
-            "failed": failed,
-            "errors": errors,
-            "total": len(products)
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    except Excepti
